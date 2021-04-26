@@ -2,8 +2,6 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include "mandelbrot.h"
-
 //TODO: Usunąć nieużywane
 #include <stdio.h>
 #include <stdlib.h>

@@ -21,7 +21,7 @@ int main() {
 	}
     uint32_t width = 1920;
     uint32_t height = 1080;
-    uint64_t samples = ;
+    uint64_t samples = 100000000;
 	float start_re = 0.f;
 	float start_im = 0.f;
 	float background_r = 0.f;

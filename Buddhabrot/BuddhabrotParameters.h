@@ -10,9 +10,11 @@ struct BuddhabrotParameters {
 };
 
 struct BuddhabrotViewport {
-	BuddhabrotViewport(uint32_t width, uint32_t height, float center_re, float center_im, float scale, float rotation);
+	BuddhabrotViewport(uint32_t width, uint32_t height, float center_re, float center_im, float scale, float rotation, uint64_t max_repeats_per_thread, uint64_t blocks_per_multiprocessor);
 	uint32_t width;
 	uint32_t height;
+    uint64_t max_repeats_per_thread;
+    uint64_t blocks_per_multiprocessor;
     // transfromation for converting complex position into pixel position
     float a11;
     float a12;

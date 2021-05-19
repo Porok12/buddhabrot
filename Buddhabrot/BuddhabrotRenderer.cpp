@@ -35,6 +35,7 @@ void BuddhabrotRenderer::addLayer(uint64_t samples, uint32_t iterations,
     if (error != cudaSuccess) {
         std::cout << "CUDA error while computing buddhabrot with CUDA\n";
     }
+
     // adding rendering results to the image, this could be CUDA too
     uint32_t max_value = 0;
     for (uint32_t value : compute_buffer) {
@@ -74,7 +75,7 @@ void BuddhabrotRenderer::saveImage(const std::string& filename) {
     size_t num_pixels = viewport.width * viewport.height;
     uint8_t* image = new uint8_t[num_pixels * 3];
     for (size_t i = 0; i < num_pixels; ++i) {
-        image[i * 3] = std::min(255.f, std::max(0.f, image_buffer[i].r * 255.f));
+        image[i * 3 + 0] = std::min(255.f, std::max(0.f, image_buffer[i].r * 255.f));
         image[i * 3 + 1] = std::min(255.f, std::max(0.f, image_buffer[i].g * 255.f));
         image[i * 3 + 2] = std::min(255.f, std::max(0.f, image_buffer[i].b * 255.f));
     }

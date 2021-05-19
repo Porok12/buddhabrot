@@ -87,12 +87,14 @@
     <ClInclude Include="BuddhabrotCuda.cuh" />
     <ClInclude Include="BuddhabrotRenderer.h" />
     <ClInclude Include="BuddhabrotParameters.h" />
+    <ClInclude Include="SettingsReader.h" />
     <ClInclude Include="stb_image.h" />
     <ClInclude Include="stb_image_write.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BuddhabrotRenderer.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="SettingsReader.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

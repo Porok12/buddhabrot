@@ -31,12 +31,27 @@ void BuddhabrotRenderer::addLayer(uint64_t samples, uint32_t iterations,
     parameters.start_re = start_re;
     parameters.start_im = start_im;
     size_t num_pixels = viewport.width * viewport.height;
-    cudaError_t error = computeBuddhabrotCUDA(parameters, viewport, compute_buffer.data());
+    cudaError_t error;
+    
+    error = initCUDA(dev_buddhabrot, dev_image, viewport);
     if (error != cudaSuccess) {
-        std::cout << "CUDA error while computing buddhabrot with CUDA\n";
+        std::cerr << "CUDA error: while initialize with CUDA\n";
     }
 
-    // adding rendering results to the image, this could be CUDA too
+    error = computeBuddhabrotCUDA(parameters, viewport, dev_buddhabrot);
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: while computing buddhabrot with CUDA\n";
+        goto Error;
+    }
+    
+    error = computeLayerCUDA(parameters, viewport, dev_buddhabrot, dev_image, r, g, b, correction_a, correction_gamma);
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: while computing layer with CUDA\n";
+        goto Error;
+    }
+Error:
+    return;
+    /* adding rendering results to the image, this could be CUDA too
     uint32_t max_value = 0;
     for (uint32_t value : compute_buffer) {
         max_value = std::max(max_value, value);
@@ -67,22 +82,26 @@ void BuddhabrotRenderer::addLayer(uint64_t samples, uint32_t iterations,
                 output.b += corrected * b;
             }
         }
-    }
+    }*/
 }
 
 void BuddhabrotRenderer::saveImage(const std::string& filename) {
     std::string actual_filename = filename + ".png";
     size_t num_pixels = viewport.width * viewport.height;
     uint8_t* image = new uint8_t[num_pixels * 3];
-    for (size_t i = 0; i < num_pixels; ++i) {
-        image[i * 3 + 0] = std::min(255.f, std::max(0.f, image_buffer[i].r * 255.f));
-        image[i * 3 + 1] = std::min(255.f, std::max(0.f, image_buffer[i].g * 255.f));
-        image[i * 3 + 2] = std::min(255.f, std::max(0.f, image_buffer[i].b * 255.f));
+    cudaError_t error = getImageCuda(image, dev_image, viewport);
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error while getting image with CUDA\n";
+        goto Error;
     }
+
     int status = stbi_write_png(actual_filename.c_str(), viewport.width, viewport.height, 3, image, viewport.width * 3);
     if (status == 0) {
         std::cerr << "Error while saving image to file\n";
     }
+
+Error:
+    freeCUDA(dev_buddhabrot, dev_image);
     delete[] image;
 }
 

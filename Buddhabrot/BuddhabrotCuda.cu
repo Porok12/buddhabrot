@@ -13,7 +13,60 @@
 #include <iostream>
 #include <algorithm>
 
-#include "stb_image_write.h"
+__global__ void setup_kernel(curandState* states, uint64_t seed) {
+    uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
+    curand_init(seed, tid, 0, &states[tid]);
+}
+
+__global__ void buddhabrot_kernel(uint32_t* buffer, curandState* states,
+    uint32_t repeats, BuddhabrotParameters parameters, BuddhabrotViewport viewport) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState rng_state = states[tid];
+    float c_re, c_im, z_re, z_im, tmp_re, tmp_im;
+    uint32_t iterations;
+    // iterations loop
+    for (uint32_t i = 0; i < repeats; ++i) {
+        c_re = -2 + 4 * curand_uniform(&rng_state);
+        c_im = -2 + 4 * curand_uniform(&rng_state);
+        iterations = 0;
+        z_re = parameters.start_re;
+        z_im = parameters.start_im;
+        // first iteration without affecting the global memory
+        // checking if it escapes
+        while ((z_re * z_re + z_im * z_im) < 4 && iterations < parameters.iterations) {
+            tmp_re = z_re * z_re - z_im * z_im + c_re;
+            tmp_im = 2 * z_re * z_im + c_im;
+            z_re = tmp_re;
+            z_im = tmp_im;
+            iterations++;
+        }
+        // if interation escapes, increment counters in the buffer
+        if (iterations < parameters.iterations) {
+            z_re = parameters.start_re;
+            z_im = parameters.start_im;
+            for (uint32_t i = 0; i < iterations; ++i) {
+                tmp_re = z_re * z_re - z_im * z_im + c_re;
+                tmp_im = 2 * z_re * z_im + c_im;
+                z_re = tmp_re;
+                z_im = tmp_im;
+                // transform complex plane into pixel coordinates
+                float xb_re = z_re - viewport.b1;
+                float xb_im = z_im - viewport.b2;
+                int pixel_x = xb_re * viewport.a11 + xb_im * viewport.a12;
+                int pixel_y = xb_re * viewport.a21 + xb_im * viewport.a22;
+                // check if resulting position is in bounds and add the value to counter
+                if (pixel_x >= 0 && pixel_y >= 0 &&
+                    pixel_x < viewport.width && pixel_y < viewport.height) {
+                    atomicAdd(&buffer[pixel_x + pixel_y * viewport.width], 1.0f);
+                }
+            }
+        }
+    }
+    
+    // save rng back to global so that next call can reuse it
+    states[tid] = rng_state;
+}
+
 
 //template<unsigned int blockSize>
 __device__ void wrapReduce(volatile uint32_t* sdata, int tid) {
@@ -73,91 +126,13 @@ __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, floa
     }
 }
 
-__global__ void save_kernel(float* g_data, uint8_t* image, uint32_t size) {
+__global__ void save_kernel(uint8_t* image, const float* data, const uint32_t size) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i >= size)
         return;
 
-    image[i] = min(255.f, max(0.f, g_data[i] * 255.f));
-}
-
-/*float norm_mul = 1.f / max_value;
-for (size_t i = 0; i < num_pixels; ++i) {
-    float normalized = compute_buffer[i] * norm_mul;
-    float corrected = correction_a * std::pow(normalized, correction_gamma);
-    FloatRGB& output = image_buffer[i];
-    output.r += corrected * r;
-    output.g += corrected * g;
-    output.b += corrected * b;
-}*/
-
-/*
-uint8_t* image = new uint8_t[num_pixels * 3];
-for (size_t i = 0; i < num_pixels; ++i) {
-    image[i * 3] = std::min(255.f, std::max(0.f, image_buffer[i].r * 255.f));
-    image[i * 3 + 1] = std::min(255.f, std::max(0.f, image_buffer[i].g * 255.f));
-    image[i * 3 + 2] = std::min(255.f, std::max(0.f, image_buffer[i].b * 255.f));
-}
-*/
-
-
-
-
-
-
-__global__ void setup_kernel(curandState* states, uint64_t seed) {
-    uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
-    curand_init(seed, tid, 0, &states[tid]);
-}
-
-__global__ void buddhabrot_kernel(uint32_t* buffer, curandState* states,
-    uint32_t repeats, BuddhabrotParameters parameters, BuddhabrotViewport viewport) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    curandState rng_state = states[tid];
-    float c_re, c_im, z_re, z_im, tmp_re, tmp_im;
-    uint32_t iterations;
-    // iterations loop
-    for (uint32_t i = 0; i < repeats; ++i) {
-        c_re = -2 + 4 * curand_uniform(&rng_state);
-        c_im = -2 + 4 * curand_uniform(&rng_state);
-        iterations = 0;
-        z_re = parameters.start_re;
-        z_im = parameters.start_im;
-        // first iteration without affecting the global memory
-        // checking if it escapes
-        while ((z_re * z_re + z_im * z_im) < 4 && iterations < parameters.iterations) {
-            tmp_re = z_re * z_re - z_im * z_im + c_re;
-            tmp_im = 2 * z_re * z_im + c_im;
-            z_re = tmp_re;
-            z_im = tmp_im;
-            iterations++;
-        }
-        // if interation escapes, increment counters in the buffer
-        if (iterations < parameters.iterations) {
-            z_re = parameters.start_re;
-            z_im = parameters.start_im;
-            for (uint32_t i = 0; i < iterations; ++i) {
-                tmp_re = z_re * z_re - z_im * z_im + c_re;
-                tmp_im = 2 * z_re * z_im + c_im;
-                z_re = tmp_re;
-                z_im = tmp_im;
-                // transform complex plane into pixel coordinates
-                float xb_re = z_re - viewport.b1;
-                float xb_im = z_im - viewport.b2;
-                int pixel_x = xb_re * viewport.a11 + xb_im * viewport.a12;
-                int pixel_y = xb_re * viewport.a21 + xb_im * viewport.a22;
-                // check if resulting position is in bounds and add the value to counter
-                if (pixel_x >= 0 && pixel_y >= 0 &&
-                    pixel_x < viewport.width && pixel_y < viewport.height) {
-                    atomicAdd(&buffer[pixel_x + pixel_y * viewport.width], 1.0f);
-                }
-            }
-        }
-    }
-    
-    // save rng back to global so that next call can reuse it
-    states[tid] = rng_state;
+    image[i] = min(255.f, max(0.f, data[i] * 255.f));
 }
 
 BuddhabrotViewport::BuddhabrotViewport(uint32_t width, uint32_t height,
@@ -191,9 +166,8 @@ BuddhabrotViewport::BuddhabrotViewport(uint32_t width, uint32_t height,
 }
 
 cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
-    const BuddhabrotViewport& viewport, uint32_t* buffer) {
+    const BuddhabrotViewport& viewport, uint32_t* dev_buddhabrot) {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    uint32_t* dev_buffer;
     cudaError_t cudaStatus;
     curandState* dev_curand_states;
 
@@ -221,6 +195,7 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
         fprintf(stderr, "cudaDeviceGetAttribute failed!");
         goto Error;
     }
+
     uint64_t num_blocks = num_multiprocessors * blocks_per_multiprocessor;
     uint64_t num_threads = num_blocks * threads_per_block;
     uint64_t num_samples = (parameters.samples / num_threads) * num_threads;
@@ -244,24 +219,18 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     std::cout << "\tsetup_kernel completed in " << milliseconds << "ms\n";
+
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "setup_kernel failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
+
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching setup_kernel!\n", cudaStatus);
         goto Error;
     }
-
-    // Result buffer allocation
-	cudaStatus = cudaMalloc((void**) &dev_buffer,
-        sizeof(uint32_t) * viewport.width * viewport.height);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMalloc failed!");
-		goto Error;
-	}
 
     // Computing the fractal
     uint64_t samples_left_to_compute = num_samples;
@@ -273,97 +242,158 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
         num_launches++;
         samples_left_to_compute -= needed_repeats * num_threads;
         buddhabrot_kernel << <num_blocks, threads_per_block >> > (
-            dev_buffer, dev_curand_states, needed_repeats, parameters, viewport);
+            dev_buddhabrot, dev_curand_states, needed_repeats, parameters, viewport
+        );
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    std::cout << "\tbuddhabrot_kernel completed in " << milliseconds << "ms (launched "<< num_launches<<" times)\n";
+    std::cout << "\tbuddhabrot_kernel completed in " << milliseconds << "ms (launched " << num_launches << " times)\n";
+    
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "buddhabrot_kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
+    
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching buddhabrot_kernel!\n", cudaStatus);
         goto Error;
     }
 
-    //vvv
-    //uint32_t max_value;
-    //cudaMemcpyFromSymbol(&max_value, "d_max_value", sizeof(max_value), 0, cudaMemcpyDeviceToHost);
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << "\tComputing a layer (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
 
+Error:
     cudaFree(dev_curand_states);
+    return cudaStatus;
+}
+
+cudaError_t computeLayerCUDA(
+    const BuddhabrotParameters& parameters,
+    const BuddhabrotViewport& viewport, 
+    uint32_t* &dev_buddhabrot, 
+    float* &dev_image,
+    float r, float g, float b,
+    float correction_a, float correction_gamma
+) {
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    cudaError_t cudaStatus;
+    uint32_t image_size = viewport.width * viewport.height * 3;
 
     uint32_t max_value;
     uint32_t size = viewport.width * viewport.height;
     uint32_t tmp_size = size / 2;
-    uint32_t TPB = 1024;
+    uint32_t TPB = 1024; //TODO
     uint32_t TPBx2 = 2 * TPB;
 
+    // Calculate max value using kernel
     uint32_t* dev_tmp;
     cudaStatus = cudaMalloc((void**) &dev_tmp, size * sizeof(uint32_t));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!\n");
+        goto Error;
+    }
     cudaStatus = cudaMemset(dev_tmp, 0, size * sizeof(uint32_t));
 
     dim3 gridDim((size + TPBx2 - 1) / TPBx2);
     dim3 blockDim(TPB);
     uint32_t sharedmem = TPB * sizeof(uint32_t);
-    //std::cout << "" << gridDim.x << std::endl;
-    //std::cout << "" << blockDim.x << std::endl;
-    //std::cout << "" << sharedmem << std::endl;
 
-    max_kernel << <gridDim, blockDim, sharedmem >> > (dev_buffer, dev_tmp, size);
+    max_kernel << <gridDim, blockDim, sharedmem >> > (dev_buddhabrot, dev_tmp, size);
     for (uint32_t i = TPB; i < size; i *= TPB) {
         max_kernel << <gridDim, blockDim, sharedmem >> > (dev_tmp, dev_tmp, size);
     }
 
     cudaStatus = cudaMemcpy(&max_value, dev_tmp, 1 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    std::cout << "Max value: " << max_value << std::endl;
+    std::cout << "\tlayer max: " << max_value << "\n";
 
-    cudaFree(dev_tmp);
+    // Calculate layer
+    if (max_value > 0) {
+        float norm_mul = 1.f / max_value;
+        if (false) { // subtractive_blending
 
-    uint8_t* dev_image;
-    uint32_t image_size = viewport.width * viewport.height * 3;
-    cudaStatus = cudaMalloc((void**) &dev_image, image_size * sizeof(uint8_t));
-    cudaStatus = cudaMemset(dev_image, 0, image_size * sizeof(uint8_t));
-
-    float* dev_fimage;
-    cudaStatus = cudaMalloc((void**) &dev_fimage, image_size * sizeof(float));
-
-    float norm_mul = 1.f / max_value;
-    std::cout << "norm_mul: " << norm_mul << std::endl;
-    dim3 gridDim2((image_size + TPB - 1) / TPB);
-    dim3 blockDim2(TPB);
-    layer_kernel<<<gridDim2, blockDim2>>>(dev_buffer, dev_fimage, image_size, norm_mul, 1, 0, 0, 2, 1);
-    save_kernel<< <gridDim2, blockDim2 >> > (dev_fimage, dev_image, image_size);
-
-    uint8_t* image = new uint8_t[image_size];
-    cudaStatus = cudaMemcpy(image, dev_image, image_size * sizeof(uint8_t), cudaMemcpyDeviceToHost);
-
-    cudaFree(dev_image);
-    cudaFree(dev_fimage);
-
-    int status = stbi_write_png("test.png", viewport.width, viewport.height, 3, image, viewport.width * 3);
-    if (status == 0) {
-        std::cerr << "Error while saving image to file\n";
+        }
+        else {
+            dim3 gridDim2((image_size + TPB - 1) / TPB);
+            dim3 blockDim2(TPB);
+            layer_kernel << <gridDim2, blockDim2 >> > (
+                dev_buddhabrot, dev_image, image_size, norm_mul, r, g, b, correction_a, correction_gamma
+            );
+        }
     }
-    delete[] image;
 
-    //^^^
-
-    // Copying the results back to host
-    cudaStatus = cudaMemcpy(buffer, dev_buffer,
-        sizeof(uint32_t) * viewport.width * viewport.height, cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    std::cout << "\tComputing a layer (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+    std::cout << "\tComputing image (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
 
 Error:
-    cudaFree(dev_buffer);
+    cudaFree(dev_tmp);
     return cudaStatus;
 }
 
+cudaError_t getImageCuda(uint8_t* &image, float* &dev_image, const BuddhabrotViewport& viewport) {
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    uint32_t TPB = 1024; //TODO
+    cudaError_t cudaStatus;
+    uint32_t image_size = viewport.width * viewport.height * 3;
+
+    uint8_t* dev_tmp;
+    cudaStatus = cudaMalloc((void**) &dev_tmp, image_size * sizeof(uint8_t));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!\n");
+        goto Error;
+    }
+
+    dim3 gridDim((image_size + TPB - 1) / TPB);
+    dim3 blockDim(TPB);
+    save_kernel << <gridDim, blockDim >> > (dev_tmp, dev_image, image_size);
+
+    cudaStatus = cudaMemcpy(image, dev_tmp, image_size * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!\n");
+        goto Error;
+    }
+
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << "Getting image (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+
+Error:
+    cudaFree(dev_tmp);
+    return cudaStatus;
+}
+
+cudaError_t initCUDA(uint32_t* &dev_buddhabrot, float* &dev_image, const BuddhabrotViewport& viewport) {
+    cudaError_t cudaStatus; 
+    uint32_t size = viewport.width * viewport.height;
+    uint32_t channels = 3;
+    
+    if (dev_image == NULL) {
+        cudaStatus = cudaMalloc((void**)&dev_image, size * channels * sizeof(float));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMalloc failed!\n");
+            goto Error;
+        }
+        //Depends
+        cudaStatus = cudaMemset(dev_image, 0, size * channels * sizeof(float));
+    }
+    
+
+    if (dev_buddhabrot != NULL) {
+        cudaFree(dev_buddhabrot);
+    }
+    cudaStatus = cudaMalloc((void**) &dev_buddhabrot, size * sizeof(uint32_t));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!\n");
+        goto Error;
+    }
+    cudaStatus = cudaMemset(dev_buddhabrot, 0, size * sizeof(uint32_t));
+
+Error:
+    return cudaStatus;
+}
+
+void freeCUDA(uint32_t* &dev_buddhabrot, float* &dev_image) {
+    cudaFree(dev_image); dev_image = NULL;
+    cudaFree(dev_buddhabrot); dev_buddhabrot = NULL;
+}

@@ -42,13 +42,8 @@ int main(int argc, char* argv[]) {
     BuddhabrotViewport viewport(width, height, center_re, center_im, scale, rotation, max_repeats_per_thread, blocks_per_multiprocessor);
     BuddhabrotRenderer renderer(viewport, false, 0, 0, 0, start_re, start_im);
     renderer.addLayer(samples, j.value("iterations_r", 800), 1, 0, 0, 2, j.value("gamma_r", 1));
-    //renderer.addLayer(samples, j.value("iterations_g", 200), 0, 1, 0, 2, j.value("gamma_g", 1));
-    //renderer.addLayer(samples, j.value("iterations_b", 50), 0, 0, 1, 2, j.value("gamma_b", 1));
-	/*max_kernel(g_data, max_value, size)
-	float norm_mul = 1.f / max_value;
-	layer_kernel(g_data, dev_image, norm_mul, 1, 0, 0, 2, 1);
-	layer_kernel(g_data, dev_image, norm_mul, 0, 1, 0, 2, 1);
-	layer_kernel(g_data, dev_image, norm_mul, 0, 0, 1, 2, 1);*/
+    renderer.addLayer(samples, j.value("iterations_g", 200), 0, 1, 0, 2, j.value("gamma_g", 1));
+    renderer.addLayer(samples, j.value("iterations_b", 50), 0, 0, 1, 2, j.value("gamma_b", 1));
     renderer.saveImage(filename);
     return EXIT_SUCCESS;
 }

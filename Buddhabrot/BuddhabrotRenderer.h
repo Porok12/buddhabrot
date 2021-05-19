@@ -32,6 +32,5 @@ private:
     std::vector<uint32_t> compute_buffer;
 	float* dev_image = NULL;
 	uint32_t* dev_buddhabrot = NULL;
-	
 };
 

@@ -68,18 +68,17 @@ __global__ void buddhabrot_kernel(uint32_t* buffer, curandState* states,
 }
 
 
-//template<unsigned int blockSize>
+template<unsigned int blockSize>
 __device__ void wrapReduce(volatile uint32_t* sdata, int tid) {
-    //if (blockSize >= 64);
-    sdata[tid] = max(sdata[tid], sdata[tid + 32]);
-    sdata[tid] = max(sdata[tid], sdata[tid + 16]);
-    sdata[tid] = max(sdata[tid], sdata[tid + 8]);
-    sdata[tid] = max(sdata[tid], sdata[tid + 4]);
-    sdata[tid] = max(sdata[tid], sdata[tid + 2]);
-    sdata[tid] = max(sdata[tid], sdata[tid + 1]);
+    if (blockSize >= 64) sdata[tid] = max(sdata[tid], sdata[tid + 32]);
+    if (blockSize >= 32) sdata[tid] = max(sdata[tid], sdata[tid + 16]);
+    if (blockSize >= 16) sdata[tid] = max(sdata[tid], sdata[tid + 8]);
+    if (blockSize >= 8) sdata[tid] = max(sdata[tid], sdata[tid + 4]);
+    if (blockSize >= 4) sdata[tid] = max(sdata[tid], sdata[tid + 2]);
+    if (blockSize >= 2) sdata[tid] = max(sdata[tid], sdata[tid + 1]);
 }
 
-//template<unsigned int blockSize>
+template<unsigned int blockSize>
 __global__ void max_kernel(uint32_t* g_data, uint32_t* g_tmp, uint32_t size) {
     extern __shared__ uint32_t sdata[];
 
@@ -90,20 +89,37 @@ __global__ void max_kernel(uint32_t* g_data, uint32_t* g_tmp, uint32_t size) {
     sdata[tid] = max(x1, x2);
     __syncthreads();
 
-    for (int s = blockDim.x / 2; s > 32; s >>= 1) {
+    /*for (int s = blockDim.x / 2; s > 32; s >>= 1) {
         if (tid < s) {
             sdata[tid] = max(sdata[tid], sdata[tid + s]);
         }
         __syncthreads();
+    }*/
+    if (blockSize >= 1024) {
+        if (tid < 512) { sdata[tid] = max(sdata[tid], sdata[tid + 512]); }
+        __syncthreads();
+    }
+    if (blockSize >= 512) {
+        if (tid < 256) { sdata[tid] = max(sdata[tid], sdata[tid + 256]); }
+        __syncthreads();
+    }
+    if (blockSize >= 256) {
+        if (tid < 128) { sdata[tid] = max(sdata[tid], sdata[tid + 128]); }
+        __syncthreads();
+    }
+    if (blockSize >= 128) {
+        if (tid < 64) { sdata[tid] = max(sdata[tid], sdata[tid + 64]); }
+        __syncthreads();
     }
 
-    if (tid < 32) wrapReduce(sdata, tid);
+    if (tid < 32) wrapReduce<blockSize>(sdata, tid);
 
     if (tid == 0) {
         g_tmp[blockIdx.x] = sdata[0];
     }
 }
 
+template <int factor>
 __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, float norm_mul, float r, float g, float b, float correction, float gamma) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -115,13 +131,13 @@ __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, floa
 
     switch (i % 3) {
     case 0:
-        image[i] += corrected * r;
+        image[i] += corrected * r * factor;
         break;
     case 1:
-        image[i] += corrected * g;
+        image[i] += corrected * g * factor;
         break;
     case 2:
-        image[i] += corrected * b;
+        image[i] += corrected * b * factor;
         break;
     }
 }
@@ -133,6 +149,47 @@ __global__ void save_kernel(uint8_t* image, const float* data, const uint32_t si
         return;
 
     image[i] = min(255.f, max(0.f, data[i] * 255.f));
+}
+
+
+void max_kernel_helper(dim3 grid_dim, dim3 block_dim, uint32_t smem_size, uint32_t*& dev_vec, uint32_t*& dev_tmp, uint32_t size, uint32_t threads) {
+    switch (threads) {
+    case 1024:
+        max_kernel<1024> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 512:
+        max_kernel< 512> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 256:
+        max_kernel< 256> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 128:
+        max_kernel< 128> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 64:
+        max_kernel<  64> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 32:
+        max_kernel<  32> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 16:
+        max_kernel<  16> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 8:
+        max_kernel<   8> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 4:
+        max_kernel<   4> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 2:
+        max_kernel<   2> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    case 1:
+        max_kernel<   1> << <grid_dim, block_dim, smem_size >> > (dev_vec, dev_tmp, size);
+        break;
+    default:
+        std::cerr << "Unhadled threads" << std::endl;
+    }
 }
 
 BuddhabrotViewport::BuddhabrotViewport(uint32_t width, uint32_t height,
@@ -301,9 +358,13 @@ cudaError_t computeLayerCUDA(
     dim3 blockDim(TPB);
     uint32_t sharedmem = TPB * sizeof(uint32_t);
 
-    max_kernel << <gridDim, blockDim, sharedmem >> > (dev_buddhabrot, dev_tmp, size);
+    /*max_kernel << <gridDim, blockDim, sharedmem >> > (dev_buddhabrot, dev_tmp, size);
     for (uint32_t i = TPB; i < size; i *= TPB) {
         max_kernel << <gridDim, blockDim, sharedmem >> > (dev_tmp, dev_tmp, size);
+    }*/
+    max_kernel_helper(gridDim, blockDim, sharedmem, dev_buddhabrot, dev_tmp, size, TPB);
+    for (uint32_t i = TPB; i < size; i *= TPB) {
+        max_kernel_helper(gridDim, blockDim, sharedmem, dev_tmp, dev_tmp, size, TPB);
     }
 
     cudaStatus = cudaMemcpy(&max_value, dev_tmp, 1 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
@@ -312,13 +373,18 @@ cudaError_t computeLayerCUDA(
     // Calculate layer
     if (max_value > 0) {
         float norm_mul = 1.f / max_value;
+        dim3 gridDim2((image_size + TPB - 1) / TPB);
+        dim3 blockDim2(TPB);
         if (false) { // subtractive_blending
-
+            //r = background_color.r - r;
+            //g = background_color.g - g;
+            //b = background_color.b - b;
+            layer_kernel<-1> <<< gridDim2, blockDim2 >>> (
+                dev_buddhabrot, dev_image, image_size, norm_mul, r, g, b, correction_a, correction_gamma
+                );
         }
         else {
-            dim3 gridDim2((image_size + TPB - 1) / TPB);
-            dim3 blockDim2(TPB);
-            layer_kernel << <gridDim2, blockDim2 >> > (
+            layer_kernel<1> <<< gridDim2, blockDim2 >>> (
                 dev_buddhabrot, dev_image, image_size, norm_mul, r, g, b, correction_a, correction_gamma
             );
         }

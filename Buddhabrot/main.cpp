@@ -3,6 +3,7 @@
 #include "cuda_runtime.h"
 #include <string>
 #include <stdio.h>
+#include <chrono>
 #include "BuddhabrotRenderer.h"
 #include "SettingsReader.h"
 
@@ -39,11 +40,17 @@ int main(int argc, char* argv[]) {
 	float scale = j.value("scale", 3.f);
 	float rotation = j.value("rotation", 90.f) * M_PI / 180.f;
 	std::string filename = j.value("filename", "buddhabrot");
+
+	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     BuddhabrotViewport viewport(width, height, center_re, center_im, scale, rotation, max_repeats_per_thread, blocks_per_multiprocessor);
     BuddhabrotRenderer renderer(viewport, false, 0, 0, 0, start_re, start_im);
     renderer.addLayer(samples, j.value("iterations_r", 800), 1, 0, 0, 2, j.value("gamma_r", 1));
     renderer.addLayer(samples, j.value("iterations_g", 200), 0, 1, 0, 2, j.value("gamma_g", 1));
     renderer.addLayer(samples, j.value("iterations_b", 50), 0, 0, 1, 2, j.value("gamma_b", 1));
     renderer.saveImage(filename);
+	std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+	std::cout << "Total time (CPU): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+
+
     return EXIT_SUCCESS;
 }

@@ -51,38 +51,6 @@ void BuddhabrotRenderer::addLayer(uint64_t samples, uint32_t iterations,
     }
 Error:
     return;
-    /* adding rendering results to the image, this could be CUDA too
-    uint32_t max_value = 0;
-    for (uint32_t value : compute_buffer) {
-        max_value = std::max(max_value, value);
-    }
-    std::cout << "\tlayer max: " << max_value << "\n";
-    if (max_value > 0) {
-        float norm_mul = 1.f / max_value;
-        if (subtractive_blending) {
-            r = background_color.r - r;
-            g = background_color.g - g;
-            b = background_color.b - b;
-            for (size_t i = 0; i < num_pixels; ++i) {
-                float normalized = compute_buffer[i] * norm_mul;
-                float corrected = correction_a * std::pow(normalized, correction_gamma);
-                FloatRGB& output = image_buffer[i];
-                output.r -= corrected * r;
-                output.g -= corrected * g;
-                output.b -= corrected * b;
-            }
-        }
-        else {
-            for (size_t i = 0; i < num_pixels; ++i) {
-                float normalized = compute_buffer[i] * norm_mul;
-                float corrected = correction_a * std::pow(normalized, correction_gamma);
-                FloatRGB& output = image_buffer[i];
-                output.r += corrected * r;
-                output.g += corrected * g;
-                output.b += corrected * b;
-            }
-        }
-    }*/
 }
 
 void BuddhabrotRenderer::saveImage(const std::string& filename) {

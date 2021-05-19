@@ -119,7 +119,6 @@ __global__ void max_kernel(uint32_t* g_data, uint32_t* g_tmp, uint32_t size) {
     }
 }
 
-template <int factor>
 __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, float norm_mul, float r, float g, float b, float correction, float gamma) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -131,24 +130,35 @@ __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, floa
 
     switch (i % 3) {
     case 0:
-        image[i] += corrected * r * factor;
+        image[i] += corrected * r;
         break;
     case 1:
-        image[i] += corrected * g * factor;
+        image[i] += corrected * g;
         break;
     case 2:
-        image[i] += corrected * b * factor;
+        image[i] += corrected * b;
         break;
     }
 }
 
-__global__ void save_kernel(uint8_t* image, const float* data, const uint32_t size) {
+__global__ void save_kernel(uint8_t* image, const float* data, const uint32_t size,
+    float background_r, float background_g, float background_b) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i >= size)
         return;
 
-    image[i] = min(255.f, max(0.f, data[i] * 255.f));
+    switch (i % 3) {
+    case 0:
+        image[i] = min(255.f, max(0.f, (background_r + data[i]) * 255.f));
+        break;
+    case 1:
+        image[i] = min(255.f, max(0.f, (background_g + data[i]) * 255.f));
+        break;
+    case 2:
+        image[i] = min(255.f, max(0.f, (background_b + data[i]) * 255.f));
+        break;
+    }
 }
 
 
@@ -228,9 +238,6 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
     cudaError_t cudaStatus;
     curandState* dev_curand_states;
 
-    cudaStream_t computeStream;
-    cudaStreamCreateWithFlags(&computeStream, cudaStreamNonBlocking); //cudaStreamNonBlocking cudaStreamDefault
-
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -275,13 +282,12 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    std::cout << "\tsetup_kernel completed in " << milliseconds << "ms\n";
-
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "setup_kernel failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
+    std::cout << "\tsetup_kernel completed in " << milliseconds << "ms\n";
 
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
@@ -305,13 +311,13 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    std::cout << "\tbuddhabrot_kernel completed in " << milliseconds << "ms (launched " << num_launches << " times)\n";
-    
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "buddhabrot_kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
+    std::cout << "\tbuddhabrot_kernel completed in " << milliseconds << "ms (launched " << num_launches << " times)\n";
+    
     
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
@@ -320,7 +326,7 @@ cudaError_t computeBuddhabrotCUDA(const BuddhabrotParameters& parameters,
     }
 
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    std::cout << "\tComputing a layer (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+    std::cout << "\tComputing layer (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
 
 Error:
     cudaFree(dev_curand_states);
@@ -333,16 +339,24 @@ cudaError_t computeLayerCUDA(
     uint32_t* &dev_buddhabrot, 
     float* &dev_image,
     float r, float g, float b,
-    float correction_a, float correction_gamma
+    float correction_a, float correction_gamma,
+    bool subtractive_blending, float background_r,
+    float background_g, float background_b
 ) {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     cudaError_t cudaStatus;
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float milliseconds;
+
     uint32_t image_size = viewport.width * viewport.height * 3;
 
     uint32_t max_value;
     uint32_t size = viewport.width * viewport.height;
     uint32_t tmp_size = size / 2;
-    uint32_t TPB = 1024; //TODO
+    uint32_t TPB = 512;
     uint32_t TPBx2 = 2 * TPB;
 
     // Calculate max value using kernel
@@ -358,15 +372,21 @@ cudaError_t computeLayerCUDA(
     dim3 blockDim(TPB);
     uint32_t sharedmem = TPB * sizeof(uint32_t);
 
-    /*max_kernel << <gridDim, blockDim, sharedmem >> > (dev_buddhabrot, dev_tmp, size);
-    for (uint32_t i = TPB; i < size; i *= TPB) {
-        max_kernel << <gridDim, blockDim, sharedmem >> > (dev_tmp, dev_tmp, size);
-    }*/
+    cudaEventRecord(start);
     max_kernel_helper(gridDim, blockDim, sharedmem, dev_buddhabrot, dev_tmp, size, TPB);
     for (uint32_t i = TPB; i < size; i *= TPB) {
         max_kernel_helper(gridDim, blockDim, sharedmem, dev_tmp, dev_tmp, size, TPB);
     }
-
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "max_kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        goto Error;
+    }
+    std::cout << "\tmax_kernel completed in " << milliseconds << "ms\n";
+    
     cudaStatus = cudaMemcpy(&max_value, dev_tmp, 1 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
     std::cout << "\tlayer max: " << max_value << "\n";
 
@@ -375,32 +395,49 @@ cudaError_t computeLayerCUDA(
         float norm_mul = 1.f / max_value;
         dim3 gridDim2((image_size + TPB - 1) / TPB);
         dim3 blockDim2(TPB);
-        if (false) { // subtractive_blending
-            //r = background_color.r - r;
-            //g = background_color.g - g;
-            //b = background_color.b - b;
-            layer_kernel<-1> <<< gridDim2, blockDim2 >>> (
+        cudaEventRecord(start);
+        if (subtractive_blending) {
+            r = r - background_r;
+            g = g - background_g;
+            b = b - background_b;
+            layer_kernel<<< gridDim2, blockDim2 >>> (
                 dev_buddhabrot, dev_image, image_size, norm_mul, r, g, b, correction_a, correction_gamma
                 );
         }
         else {
-            layer_kernel<1> <<< gridDim2, blockDim2 >>> (
+            layer_kernel<<< gridDim2, blockDim2 >>> (
                 dev_buddhabrot, dev_image, image_size, norm_mul, r, g, b, correction_a, correction_gamma
             );
         }
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "layer_kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            goto Error;
+        }
+        std::cout << "\layer_kernel completed in " << milliseconds << "ms\n";
     }
 
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    std::cout << "\tComputing image (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+    std::cout << "\tComputing layer colors (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
 
 Error:
     cudaFree(dev_tmp);
     return cudaStatus;
 }
 
-cudaError_t getImageCuda(uint8_t* &image, float* &dev_image, const BuddhabrotViewport& viewport) {
+cudaError_t getImageCUDA(uint8_t* &image, float* &dev_image,
+    const BuddhabrotViewport& viewport,
+    float background_r, float background_g, float background_b) {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    uint32_t TPB = 1024; //TODO
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float milliseconds;
+
+    uint32_t TPB = 512;
     cudaError_t cudaStatus;
     uint32_t image_size = viewport.width * viewport.height * 3;
 
@@ -413,53 +450,77 @@ cudaError_t getImageCuda(uint8_t* &image, float* &dev_image, const BuddhabrotVie
 
     dim3 gridDim((image_size + TPB - 1) / TPB);
     dim3 blockDim(TPB);
-    save_kernel << <gridDim, blockDim >> > (dev_tmp, dev_image, image_size);
+    cudaEventRecord(start);
+    save_kernel << <gridDim, blockDim >> > (dev_tmp, dev_image, image_size,
+        background_r, background_g, background_b);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "save_kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        goto Error;
+    }
+    std::cout << "\tsave_kernel completed in " << milliseconds << "ms\n";
 
-    cudaStatus = cudaMemcpy(image, dev_tmp, image_size * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(image, dev_tmp, image_size * sizeof(uint8_t),
+        cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!\n");
         goto Error;
     }
 
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    std::cout << "Getting image (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
+    std::cout << "\tComputing image (CPU time): " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms" << std::endl;
 
 Error:
     cudaFree(dev_tmp);
     return cudaStatus;
 }
 
-cudaError_t initCUDA(uint32_t* &dev_buddhabrot, float* &dev_image, const BuddhabrotViewport& viewport) {
-    cudaError_t cudaStatus; 
+cudaError_t allocateMemoryCUDA(uint32_t*& dev_buddhabrot, float*& dev_image,
+    const BuddhabrotViewport& viewport) {
+    cudaError_t cudaStatus;
     uint32_t size = viewport.width * viewport.height;
     uint32_t channels = 3;
-    
-    if (dev_image == NULL) {
-        cudaStatus = cudaMalloc((void**)&dev_image, size * channels * sizeof(float));
-        if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMalloc failed!\n");
-            goto Error;
-        }
-        //Depends
-        cudaStatus = cudaMemset(dev_image, 0, size * channels * sizeof(float));
-    }
-    
 
-    if (dev_buddhabrot != NULL) {
-        cudaFree(dev_buddhabrot);
-    }
-    cudaStatus = cudaMalloc((void**) &dev_buddhabrot, size * sizeof(uint32_t));
+    cudaStatus = cudaMalloc((void**)&dev_image, size * channels * sizeof(float));
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!\n");
+        fprintf(stderr, "cudaMalloc dev_image failed!\n");
         goto Error;
     }
-    cudaStatus = cudaMemset(dev_buddhabrot, 0, size * sizeof(uint32_t));
+
+    cudaStatus = cudaMemset(dev_image, 0, size * channels * sizeof(float));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemset dev_image failed!\n");
+        goto Error;
+    }
+
+    cudaStatus = cudaMalloc((void**)&dev_buddhabrot, size * sizeof(uint32_t));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc dev_buddhabrot failed!\n");
+        goto Error;
+    }
 
 Error:
     return cudaStatus;
 }
 
-void freeCUDA(uint32_t* &dev_buddhabrot, float* &dev_image) {
-    cudaFree(dev_image); dev_image = NULL;
-    cudaFree(dev_buddhabrot); dev_buddhabrot = NULL;
+void freeMemoryCUDA(uint32_t*& dev_buddhabrot, float*& dev_image) {
+    cudaFree(dev_buddhabrot);
+    cudaFree(dev_image);
+}
+
+cudaError_t clearBufferCUDA(uint32_t* &dev_buddhabrot, float* &dev_image, const BuddhabrotViewport& viewport) {
+    cudaError_t cudaStatus; 
+    uint32_t size = viewport.width * viewport.height;
+    uint32_t channels = 3;
+
+    cudaStatus = cudaMemset(dev_buddhabrot, 0, size * sizeof(uint32_t));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemset dev_buddhabrot failed!\n");
+        goto Error;
+    }
+Error:
+    return cudaStatus;
 }

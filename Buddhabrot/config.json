@@ -1,16 +1,16 @@
 {
-	"width": 1920,
-	"height": 1080,
+	"width": 1000,
+	"height": 1000,
 	"start_re": 0.0,
     "start_im": 0.0,
     "background": [0.0, 0.0, 0.0],
     "blending": "add",
-    "samples": 20000000,
+    "samples": 100000000,
     "center_re": -0.5,
     "center_im": 0.0,
     "scale": 3.0,
     "rotation": 90,
-    "filename": "buddhabrot",
+    "filename": "buddhabrot",    "mrpt": 256,    "bpm": 8,
 	"layers": [
         {
             "iterations": 800,

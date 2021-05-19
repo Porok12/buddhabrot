@@ -15,6 +15,11 @@ public:
 		bool subtractive_blending,
 		float background_r, float background_g, float background_b,
 		float start_re, float start_im);
+    ~BuddhabrotRenderer();
+    BuddhabrotRenderer(const BuddhabrotRenderer& other) = delete;
+    BuddhabrotRenderer& operator=(const BuddhabrotRenderer& other) = delete;
+    BuddhabrotRenderer(BuddhabrotRenderer&& other) noexcept = delete;
+    BuddhabrotRenderer& operator=(BuddhabrotRenderer&& other) noexcept  = delete;
 
 	void addLayer(uint64_t samples, uint32_t iterations,
 		float r, float g, float b,
@@ -25,11 +30,11 @@ public:
 private:
 	BuddhabrotViewport viewport;
 	bool subtractive_blending;
-    FloatRGB background_color;
+    float background_r;
+    float background_g;
+    float background_b;
     float start_re;
     float start_im;
-	std::vector<FloatRGB> image_buffer;
-    std::vector<uint32_t> compute_buffer;
 	float* dev_image = NULL;
 	uint32_t* dev_buddhabrot = NULL;
 };

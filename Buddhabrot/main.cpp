@@ -7,6 +7,10 @@
 #include "BuddhabrotRenderer.h"
 #include "SettingsReader.h"
 
+/**
+ * @brief inicjalizacja CUDA-y
+ * @return status initcjalizacji
+*/
 cudaError_t initCuda() {
 	cudaError_t cudaStatus;
 	cudaStatus = cudaSetDevice(0);
@@ -17,6 +21,11 @@ cudaError_t initCuda() {
 	return cudaSuccess;
 }
 
+/**
+ * @brief pomocnicza funkcja, odczytuj¹ca kolor z json_array do tablicy
+ * @param result tablica do której bêd¹ za³adowane dane
+ * @param json_array obiekt z którego maj¹ byæ pobrane kolory
+*/
 inline void readColor(float* result, json& json_array) {
     int counter = 0;
     for (auto& el : json_array) {
@@ -27,6 +36,12 @@ inline void readColor(float* result, json& json_array) {
     }
 }
 
+/**
+ * @brief g³ówna funkcja
+ * @param argc iloœæ argumentów
+ * @param argv lista argumentów
+ * @return kod zakoñczenia dzia³ania
+*/
 int main(int argc, char* argv[]) {
 	json j = argc >= 2 ? load_config(argv[1]) : load_config();
 

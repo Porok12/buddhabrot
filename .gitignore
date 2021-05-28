@@ -341,3 +341,7 @@ healthchecksdb
 
 # Images
 *.png
+
+# Doxygen
+html/
+latex/

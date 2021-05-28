@@ -1,5 +1,7 @@
-﻿#include "buddhabrotCuda.cuh"
-
+﻿/**
+* @file BuddhabrotCuda.cu
+*/
+#include "buddhabrotCuda.cuh"
 #include "device_launch_parameters.h"
 #include <cmath>
 #include <stdio.h>
@@ -13,11 +15,24 @@
 #include <iostream>
 #include <algorithm>
 
+/**
+ * @brief ustawienie RNG
+ * @param states tablica ze stanami RNG
+ * @param seed ziarno
+*/
 __global__ void setup_kernel(curandState* states, uint64_t seed) {
     uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
     curand_init(seed, tid, 0, &states[tid]);
 }
 
+/**
+ * @brief kernel obliczający fraktal
+ * @param buffer tablica na obliczenia
+ * @param states tablica RNG
+ * @param repeats ilość powtórzeń
+ * @param parameters parametry fraktala
+ * @param viewport parametry obrazu
+*/
 __global__ void buddhabrot_kernel(uint32_t* buffer, curandState* states,
     uint32_t repeats, BuddhabrotParameters parameters, BuddhabrotViewport viewport) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -67,7 +82,12 @@ __global__ void buddhabrot_kernel(uint32_t* buffer, curandState* states,
     states[tid] = rng_state;
 }
 
-
+/**
+ * @brief pomocnicza funkcja kernela max_kernel
+ * @tparam blockSize rozmiar bloku
+ * @param sdata tablica w pamięci współdzielonej
+ * @param tid identyfikator wątku
+*/
 template<unsigned int blockSize>
 __device__ void wrapReduce(volatile uint32_t* sdata, int tid) {
     if (blockSize >= 64) sdata[tid] = max(sdata[tid], sdata[tid + 32]);
@@ -78,6 +98,13 @@ __device__ void wrapReduce(volatile uint32_t* sdata, int tid) {
     if (blockSize >= 2) sdata[tid] = max(sdata[tid], sdata[tid + 1]);
 }
 
+/**
+ * @brief kernel wyliczający wartość maksymalną w tablicy
+ * @tparam blockSize rozmiar bloku
+ * @param g_data tablica z danymi
+ * @param g_tmp tablica pomocnicza 
+ * @param size rozmiar tablic
+*/
 template<unsigned int blockSize>
 __global__ void max_kernel(uint32_t* g_data, uint32_t* g_tmp, uint32_t size) {
     extern __shared__ uint32_t sdata[];
@@ -119,6 +146,18 @@ __global__ void max_kernel(uint32_t* g_data, uint32_t* g_tmp, uint32_t size) {
     }
 }
 
+/**
+ * @brief kernel wyliczający wartości obrazu na podstawie danych z tablicy fraktala
+ * @param g_data tablica z danymi fraktala
+ * @param image tablica przechowująca obraz
+ * @param size rozmiar tablicy fraktala
+ * @param norm_mul wartość normalizująca
+ * @param r współczynnik składowej czerwonej
+ * @param g współczynnik składowej zielonej
+ * @param b współczynnik składowej niebieskiej
+ * @param correction wartość współczynnika a
+ * @param gamma wartośc korekcji gamma
+*/
 __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, float norm_mul, float r, float g, float b, float correction, float gamma) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -141,6 +180,15 @@ __global__ void layer_kernel(uint32_t* g_data, float* image, uint32_t size, floa
     }
 }
 
+/**
+ * @brief końcowa korekta obrazu
+ * @param image wynikowa tablica z obrazem
+ * @param data pomocnicza tablica z obrazem
+ * @param size rozmiar tablic
+ * @param background_r składowa czerwona tła
+ * @param background_g składowa zielona tła
+ * @param background_b składowa niebieska tła
+*/
 __global__ void save_kernel(uint8_t* image, const float* data, const uint32_t size,
     float background_r, float background_g, float background_b) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
